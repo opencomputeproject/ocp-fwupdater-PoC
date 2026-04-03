@@ -1,7 +1,10 @@
 This code is implementing a basic TFTP client through an RP2350 board
 attached to a Wiznet W5500 SPI ethernet adapter
 
-The primary goal is to prove that a firmware can be fully validated and updated
+Only ipv4 is supported, and no VLAN
+
+The primary goal is to prove that a firmware storage device (like a spi-nor
+which contains BMC code, or ROM ) can be fully validated and updated
 before system startup using low cost micro controllers, Ethernet and industry 
 standard protocols through high level languages like golang without any human intervention.
 
@@ -55,9 +58,9 @@ The code has also been updated for TFTP transfer block size of 1400 bytes (by de
 TFTP is supporting 512 bytes). Please be sure that your TFTP server can adjust to this
 requirements
 
-tinygo flash -monitor -target pico2 -scheduler tasks -opt=2 ./main.go
+tinygo flash -monitor -target pico2 -scheduler tasks -opt=2 -stack-size=32KB ./main.go
 
 This code has been partially written using AI tools.
 
-You can reach peak performances of a w5500 which is roughly 1.7MB/s through a TFTP transfer.
+You can reach peak performances of a w5500 which is roughly 1.6MB/s through a TFTP transfer.
 
