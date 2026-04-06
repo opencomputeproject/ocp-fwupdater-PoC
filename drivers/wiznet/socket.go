@@ -29,7 +29,6 @@ func (s *Socket) initBuffers() error {
 		s.BufferSize = 2048
 	}
 
-	fmt.Printf("Socket buffer size : %dKB on socket %d S_IntR %d\n", s.BufferSize>>10, s.Num, SocketInterruptRegister)
 	err := s.d.WriteByte(s.getRegister(), SocketReceiveBufferSize, byte(s.BufferSize>>10))
 	err = s.d.WriteByte(s.getRegister(), SocketTransmitBufferSize, byte(s.BufferSize>>10))
 
