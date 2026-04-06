@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"time"
 	"w5500"
+	"strings"
+	"drivers/flash"
 )
 
 var (
@@ -592,9 +594,9 @@ func parseDHCP(buf []byte, n int) {
 	options := udpPayload[240:]
 
 	if vlanPresent {
-		fmt.Printf("VLAN: present=true id=%d pcp=%d dei=%d\n", vlanID, vlanPCP, vlanDEI)
+		logOutput("VLAN: present=true id=%d pcp=%d dei=%d", vlanID, vlanPCP, vlanDEI)
 	} else {
-		fmt.Printf("VLAN: present=false\n")
+		logOutput("VLAN: present=false")
 	}
 
 	localIP := net.IPv4(yiaddr[0], yiaddr[1], yiaddr[2], yiaddr[3])
@@ -612,7 +614,7 @@ func parseDHCP(buf []byte, n int) {
 	}
 
 	if v := parseDHCPOption(options, 54); v != nil && len(v) >= 4 {
-		fmt.Printf("Server IP: %s\n", net.IP(v).String())
+		logOutput("Server IP: %s", net.IP(v).String())
 	}
 	if v := parseDHCPOption(options, 1); v != nil && len(v) >= 4 {
 		DefaultClientConfig.IPv4.Netmask = net.IP(v)
@@ -752,7 +754,7 @@ func BuildARPpacket(srcMAC net.HardwareAddr, srcIP net.IP, dstIP net.IP, opcode 
 
 // BuildTFTPRRQ builds a TFTP RRQ packet bytes for a given filename and mode ("octet").
 func BuildTFTPRRQ(filename, mode string, chunk uint16) []byte {
-	fmt.Printf("TFTP Transfer starts\n")
+	logOutput("TFTP Transfer starts")
 	var blksize string
 	totalTime = 0
 	totalPacket = 0
@@ -833,6 +835,55 @@ var tx [1516]byte
 
 var rx [16384]byte
 
+
+// PadRightASCII pads s with ASCII space characters on the right
+// until len(result) >= width. If width <= 0 returns "".
+func PadRightASCII(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	n := len(s)
+	if n >= width {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(width)
+	b.WriteString(s)
+	for i := 0; i < width-n; i++ {
+		b.WriteByte(' ')
+	}
+	return b.String()
+}
+
+// PadRightExactASCII returns a string of exactly width bytes.
+// If s is longer than width it is truncated by bytes (ASCII-safe).
+// If width <= 0 returns "".
+func PadRightExactASCII(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(s) > width {
+		return s[:width]
+	}
+	// pad
+	return PadRightASCII(s, width)
+}
+func logStartStop() {
+	fmt.Printf("===================================================\n")
+}
+
+func logOutput(vals ...interface{}) {
+	newparameters := make([]interface{}, len(vals)-1)
+	for i, v := range vals {
+		if i > 0 {
+			newparameters[i-1] = v
+		}
+	}
+	msg := fmt.Sprintf(vals[0].(string), newparameters...)
+	msg = PadRightExactASCII(msg, 48)
+        fmt.Printf("| %s|\n", msg)
+}
+
 //go:section .ramfuncs
 func main() {
 	var err error
@@ -841,12 +892,50 @@ func main() {
 	rxQueue = make(chan bool, 2)
 	AckPkts = make(chan ethPacket, 2)
 	time.Sleep(2 * time.Second)
+
+	// Let's initialize the SPI NOR on spi1 and see if everything is ok
+        chipselect := machine.GPIO13
+        chipselect.Configure(machine.PinConfig{Mode: machine.PinOutput})
+        chipselect.High() // Deselect
+        target := flash.NewSPI(machine.SPI1, machine.GPIO15, machine.GPIO12, machine.GPIO14, chipselect)
+	err = target.Configure(&flash.DeviceConfig{
+                Identifier: flash.DefaultDeviceIdentifier,
+        })
+	if err != nil {
+		log.Fatal("spi-nor not detected\n")
+	}
+	logStartStop()
+	logOutput("Starting spi-nor")
+	logStartStop()
+	logStartStop()
+	logOutput("spi-nor configuration dump")
+	logStartStop()
+	logOutput("Erase block size %d bytes", target.EraseBlockSize())
+	logOutput("Flash size %d bytes", target.Size())
+	logOutput("Starting chip erase")
+
+//	log.Fatal("done")
+
+	currentTime := time.Now()
+//	target.EraseAll()
+	for target.WaitUntilReady() != nil {
+	}
+	EraseEndTime := time.Now()
+	EraseFullChipTime := EraseEndTime.Sub(currentTime)
+	logOutput("Chip erase done in %.2f seconds", float64(EraseFullChipTime)/float64(time.Second))
+	logStartStop()
+//	log.Fatal("done")
+
 	mac := DefaultClientConfig.Eth.MAC
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
 	// Example transaction ID
 	var xid uint32 = 0x3903F326
+
+	logStartStop()
+	logOutput("Network setup")
+	logStartStop()
 
 	// If you received a DHCPOFFER and want to send REQUEST for the offered IP:
 	requestedIP := DefaultClientConfig.IPv4.Address
@@ -875,7 +964,8 @@ func main() {
 	// use default settings for UART
 
 	uart.Configure(machine.UARTConfig{})
-	uart.Write([]byte("Echo console enabled. Type something then press enter:\r\n"))
+	logOutput("Echo console enabled. Type something")
+	logOutput("then press enter:")
 	time.Sleep(2 * time.Second)
 
 	cs, err := wiznet.New(&net.HardwareAddr{})
@@ -888,7 +978,8 @@ func main() {
 	if err != nil {
 		log.Printf("gethardwareaddr: %v", err)
 	}
-	fmt.Printf("Macaddr is set to %s\n", macaddr)
+	
+	logOutput("Macaddr is set to %s", macaddr)
 	// slices.Equal worketh not.
 	if (macaddr[0] == 0) && (macaddr[1] == 0) && (macaddr[2] == 0 && (macaddr[3] == 0) && macaddr[4] == 0) && (macaddr[5] == 0) {
 		copy(macaddr, mac)
@@ -914,7 +1005,7 @@ func main() {
 	// And we shall be able to read from it
 	// The packet are going to be received and processed into different threads
 	if cs.GetPHYConfiguration().Is100MbpsLink() {
-		fmt.Printf("100mbps Link detected\n")
+		logOutput("100mbps Link detected")
 	}
 
 	input := make([]byte, 64)
@@ -961,8 +1052,11 @@ func main() {
 			}
 		}()
 		go func() {
+			
 			var txFrame ethPacket
+			promptCount := 0
 			// Configure LED
+		
 			led := machine.LED
 			led.Configure(machine.PinConfig{Mode: machine.PinOutput})
 			interruptPin := machine.GPIO21
@@ -992,7 +1086,7 @@ func main() {
 				sirq, err := s.ReadInterrupt()
 
 				if err != nil {
-					log.Printf("reading socket irq:%v", err)
+					logOutput("reading socket irq:%v", err)
 				}
 				if sirq&4 == 0 {
 					continue
@@ -1000,13 +1094,13 @@ func main() {
 				var memStats runtime.MemStats
 				runtime.ReadMemStats(&memStats)
 
-				/*                		if ( memStats.HeapInuse > 500000 ) {
+				/*  if ( memStats.HeapInuse > 500000 ) {
 				        count = count + 1
 				}
 				*/
 
 				if err := s.WriteInterrupt(sirq); err != nil {
-					log.Printf("clearing socket irq:%v", err)
+					logOutput("clearing socket irq:%v", err)
 				}
 				if profile {
 					interuptS = time.Now()
@@ -1024,7 +1118,7 @@ func main() {
 				}
 
 				if n < ethHeaderLen+ipHeaderMinLen+udpHeaderLen {
-					log.Printf("Packet received with %d bytes", n)
+					logOutput("Packet received with %d bytes", n)
 					continue
 				}
 				// The buffer can contain multiple packets
@@ -1100,7 +1194,21 @@ func main() {
 							DefaultClientConfig.Boot.TFTPTransferredBytes += len(pkt.Data)
 							if DefaultClientConfig.Boot.TFTPTransferredBytes >
 								(DefaultClientConfig.Boot.TFTPPreviousTransferredBytes + 128*1024) {
-								uart.Write([]byte("#"))
+								promptCount++
+								if promptCount > 1 {
+									// Move cursor up and clear line
+									fmt.Printf("\033[1A")  // move cursor up 1 line
+									fmt.Printf("\033[2K")  // clear entire line
+									toPrint := string("")
+									for i := 0 ; i < promptCount ; i++ {
+										toPrint += "#"
+									}
+									logOutput(toPrint)
+								} else {
+									logOutput("#")
+								}
+								
+								
 								DefaultClientConfig.Boot.TFTPPreviousTransferredBytes = DefaultClientConfig.Boot.TFTPTransferredBytes
 							}
 							switch pkt.Opcode {
@@ -1117,19 +1225,26 @@ func main() {
 								if len(pkt.Data) < int(DefaultClientConfig.Boot.TFTPblksize) {
 									led.Set(false)
 									End = time.Now()
-									uart.Write([]byte("\n"))
-									fmt.Println("Transfer time ", float64(End.Sub(Start))/float64(time.Second))
-									fmt.Printf("Data transferred: %d bytes\n", DefaultClientConfig.Boot.TFTPTransferredBytes)
-									fmt.Printf("Bandwidth: %.2f MB/s\n", (float64(DefaultClientConfig.Boot.TFTPTransferredBytes)/
-										(1024.0*1024.0))/(float64(End.Sub(Start))/float64(time.Second)))
-									fmt.Printf("TFTP transfer done\n")
-									fmt.Printf("Memory full : %d times\n", count)
+									// uart.Write([]byte("\n"))
+									logOutput("Transfer time %.2f", float64(End.Sub(Start))/float64(time.Second))
+									// fmt.Println("Transfer time ", float64(End.Sub(Start))/float64(time.Second))
+									logOutput("Data transferred: %d bytes", DefaultClientConfig.Boot.TFTPTransferredBytes)
+									// fmt.Printf("Data transferred: %d bytes\n", DefaultClientConfig.Boot.TFTPTransferredBytes)
+									logOutput("Bandwidth: %.2f MB/s", (float64(DefaultClientConfig.Boot.TFTPTransferredBytes)/
+										   (1024.0*1024.0))/(float64(End.Sub(Start))/float64(time.Second)))
+									// fmt.Printf("Bandwidth: %.2f MB/s\n", (float64(DefaultClientConfig.Boot.TFTPTransferredBytes)/
+									//	(1024.0*1024.0))/(float64(End.Sub(Start))/float64(time.Second)))
+									logOutput("TFTP transfer done")
+									// fmt.Printf("TFTP transfer done\n")
+									logOutput("Memory full : %d times", count)
+									// fmt.Printf("Memory full : %d times\n", count)
 									if profile {
-										fmt.Printf("Time to parse TFTP packet: %.2f\n", float64(totalTime)/float64(time.Second))
-										fmt.Printf("Time to waiting TFTP packet: %.2f\n", float64(totalWait)/float64(time.Second))
-										fmt.Printf("Time to reset interrupt: %.2f\n", float64(totalInterrupt)/float64(time.Second))
-										fmt.Printf("Time to read Packet: %.2f\n", float64(totalPacket)/float64(time.Second))
+										logOutput("Time to parse TFTP packet: %.2f", float64(totalTime)/float64(time.Second))
+										logOutput("Time to waiting TFTP packet: %.2f", float64(totalWait)/float64(time.Second))
+										logOutput("Time to reset interrupt: %.2f", float64(totalInterrupt)/float64(time.Second))
+										logOutput("Time to read Packet: %.2f", float64(totalPacket)/float64(time.Second))
 									}
+									logStartStop()
 									count = 0
 									DefaultClientConfig.Boot.TFTPServerport = 0
 									DefaultClientConfig.Boot.TFTPport = 0
@@ -1175,6 +1290,7 @@ func main() {
 							// TFTP will be then processed as receiving packed
 							// Build a simple TFTP RRQ for file "test.bin" in octet mode.
 							led.Set(true)
+							promptCount = 0
 							rrq := BuildTFTPRRQ("bootme", "octet", 1452)
 							DefaultClientConfig.Boot.TFTPPreviousTransferredBytes = 0
 							DefaultClientConfig.Boot.TFTPTransferredBytes = 0
@@ -1184,7 +1300,11 @@ func main() {
 							if err != nil {
 								log.Fatalf("build frame: %v", err)
 							}
-							println("sending TFTP request")
+							logStartStop()
+							logOutput("TFTP Transfer")
+							logStartStop()
+							logOutput("sending TFTP request")
+							fmt.Printf("| ")
 							txFrame.length = len(frame)
 							txFrame.frame = frame
 							txQueue <- txFrame
@@ -1199,25 +1319,21 @@ func main() {
 			}
 		}()
 	}
-	fmt.Println("Please press enter\n")
+	logOutput("Please press enter")
 	for {
 		if uart.Buffered() > 0 {
 			data, err := uart.ReadByte()
 			if err != nil {
-				log.Printf("ReadByte:%v", err)
+				logOutput("ReadByte:%v", err)
 				continue
 			}
 			switch data {
 			case 13:
 				// return key
-				uart.Write([]byte("\r\n"))
-				uart.Write([]byte("You typed: "))
-				uart.Write(input[:i])
-				uart.Write([]byte("\r\n"))
+				logOutput("You typed: %s", string(input[:i]))
 				i = 0
 			default:
 				// just echo the character
-				uart.WriteByte(data)
 				input[i] = data
 				i++
 			}

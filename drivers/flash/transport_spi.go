@@ -2,7 +2,6 @@ package flash
 
 import (
 	"machine"
-	"fmt"
 )
 
 type transport interface {
@@ -52,8 +51,6 @@ func (tr *spiTransport) configure(config *DeviceConfig) {
 func (tr *spiTransport) setClockSpeed(hz uint32) error {
 	// TODO: un-hardcode this max speed; it is probably a sensible
 	//       default maximum for atsamd and nrf at least
-//	println("Set clock speed\n")
-	fmt.Printf("Setting clock speed to %d\n", hz)
 	if hz > 62*1e6 {
 		hz = 62 * 1e6
 	}
