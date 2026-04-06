@@ -52,6 +52,7 @@ type TFTPDataPacket struct {
 var rxQueue chan bool
 var txQueue chan ethPacket
 var AckPkts chan ethPacket
+var spiQueue chan byte
 
 type EthernetConfig struct {
 	MAC        net.HardwareAddr `json:"mac"`
@@ -806,10 +807,30 @@ func BuildAckFromDataPacket(pkt TFTPDataPacket) ([]byte, error) {
 var count int
 
 func handleTxQueue(s *wiznet.Socket, DefaultClientConfig ClientNetworkConfig) {
-	count = 0
 	for {
 		txFrame := <-txQueue
 		s.Write(txFrame.frame[:txFrame.length])
+	}
+}
+
+func runSPI(pageSz uint32, target *flash.Device) {
+	page := make([]byte, pageSz)
+	count := uint32(0)
+	pgCount := uint32(0)
+	for {
+		page[count] = <- spiQueue
+		count++
+		if count == pageSz {
+			// We filled up a page
+			// Let's dump it to the spinor
+			n, _ := target.WriteAt(page, int64(pgCount) * int64(pageSz))
+			if uint32(n) != pageSz {
+				logOutput("Error during spi-nor write")
+			} 
+			pgCount++
+			count=0
+		}
+		
 	}
 }
 
@@ -891,6 +912,7 @@ func main() {
 	txQueue = make(chan ethPacket, 2)
 	rxQueue = make(chan bool, 2)
 	AckPkts = make(chan ethPacket, 2)
+
 	time.Sleep(2 * time.Second)
 
 	// Let's initialize the SPI NOR on spi1 and see if everything is ok
@@ -912,19 +934,53 @@ func main() {
 	logStartStop()
 	logOutput("Erase block size %d bytes", target.EraseBlockSize())
 	logOutput("Flash size %d bytes", target.Size())
+	logOutput("Flash page size %d bytes", target.WriteBlockSize())
+
+	pgBuffer := make([]byte, target.WriteBlockSize())
+	logStartStop()
+	logOutput("Flash header")
+	_, err = target.ReadAt(pgBuffer, 0)
+	var line string
+	var i int64
+        for i = 0 ; i < target.WriteBlockSize() ; i++ {
+		line += fmt.Sprintf("%02x ", pgBuffer[i])
+		if ((i+1) % 16)  == 0 {
+			logOutput(line)
+			line = string("")
+		}
+        }
+	logStartStop()
+
+
 	logOutput("Starting chip erase")
 
-//	log.Fatal("done")
+	spiQueue = make(chan byte, target.WriteBlockSize())
+
+	go runSPI(uint32(target.WriteBlockSize()), target)
 
 	currentTime := time.Now()
-//	target.EraseAll()
+
+	target.EraseAll()
+
 	for target.WaitUntilReady() != nil {
-	}
+        }
+
+        logStartStop()
+        logOutput("Flash header")
+        _, err = target.ReadAt(pgBuffer, 0)
+        for i = 0 ; i < target.WriteBlockSize() ; i++ {
+                line += fmt.Sprintf("%02x ", pgBuffer[i])
+                if ((i+1) % 16)  == 0 {
+                        logOutput(line)
+                        line = string("")
+                }
+        }
+        logStartStop()
+
 	EraseEndTime := time.Now()
 	EraseFullChipTime := EraseEndTime.Sub(currentTime)
 	logOutput("Chip erase done in %.2f seconds", float64(EraseFullChipTime)/float64(time.Second))
 	logStartStop()
-//	log.Fatal("done")
 
 	mac := DefaultClientConfig.Eth.MAC
 	var memStats runtime.MemStats
@@ -1009,7 +1065,7 @@ func main() {
 	}
 
 	input := make([]byte, 64)
-	i := 0
+	i = 0
 	if true {
 		s.SetInterruptMask()
 		// This go routine is going to prepare next acknowledge packet while
@@ -1094,10 +1150,6 @@ func main() {
 				var memStats runtime.MemStats
 				runtime.ReadMemStats(&memStats)
 
-				/*  if ( memStats.HeapInuse > 500000 ) {
-				        count = count + 1
-				}
-				*/
 
 				if err := s.WriteInterrupt(sirq); err != nil {
 					logOutput("clearing socket irq:%v", err)
@@ -1121,11 +1173,15 @@ func main() {
 					logOutput("Packet received with %d bytes", n)
 					continue
 				}
+
 				// The buffer can contain multiple packets
 				// which is enhancing the performance and this is in the case
 				// the TFTP server is supporting windowing
 
 				packetCount := n / 1500
+				if ( packetCount * 1500 ) != n {
+					packetCount = packetCount + 1
+				}
 
 				if packetCount == 0 {
 					packetCount = 1
@@ -1190,10 +1246,16 @@ func main() {
 								pktSize = (n - pktIndex)
 							}
 							pkt, _ := ParseTFTPDataPacket(rx[pktIndex+2:lastByte], pktSize)
-							// We can print a # every 128kB
+							// We can print a # every 1024kB
 							DefaultClientConfig.Boot.TFTPTransferredBytes += len(pkt.Data)
+							// We can push the data to the 
+							// SPI-NOR
+							for i := 0 ; i < len(pkt.Data); i++ {
+								spiQueue <- pkt.Data[i]
+							}	
+							
 							if DefaultClientConfig.Boot.TFTPTransferredBytes >
-								(DefaultClientConfig.Boot.TFTPPreviousTransferredBytes + 128*1024) {
+								(DefaultClientConfig.Boot.TFTPPreviousTransferredBytes + 1024*1024) {
 								promptCount++
 								if promptCount > 1 {
 									// Move cursor up and clear line
@@ -1207,8 +1269,6 @@ func main() {
 								} else {
 									logOutput("#")
 								}
-								
-								
 								DefaultClientConfig.Boot.TFTPPreviousTransferredBytes = DefaultClientConfig.Boot.TFTPTransferredBytes
 							}
 							switch pkt.Opcode {
@@ -1216,28 +1276,23 @@ func main() {
 								// So now we can send an answer to get the next one
 								// it is created into a specific go routine
 								// runtime.Gosched()
+
 								answerPkt := <-AckPkts
+					
 								// we might have to purge up to the time we are getting
 								// a packet which is matching the expected it
 								for (answerPkt.block - 1) != pkt.Block {
 									answerPkt = <-AckPkts
 								}
+								txQueue <- answerPkt
 								if len(pkt.Data) < int(DefaultClientConfig.Boot.TFTPblksize) {
 									led.Set(false)
 									End = time.Now()
-									// uart.Write([]byte("\n"))
 									logOutput("Transfer time %.2f", float64(End.Sub(Start))/float64(time.Second))
-									// fmt.Println("Transfer time ", float64(End.Sub(Start))/float64(time.Second))
 									logOutput("Data transferred: %d bytes", DefaultClientConfig.Boot.TFTPTransferredBytes)
-									// fmt.Printf("Data transferred: %d bytes\n", DefaultClientConfig.Boot.TFTPTransferredBytes)
 									logOutput("Bandwidth: %.2f MB/s", (float64(DefaultClientConfig.Boot.TFTPTransferredBytes)/
 										   (1024.0*1024.0))/(float64(End.Sub(Start))/float64(time.Second)))
-									// fmt.Printf("Bandwidth: %.2f MB/s\n", (float64(DefaultClientConfig.Boot.TFTPTransferredBytes)/
-									//	(1024.0*1024.0))/(float64(End.Sub(Start))/float64(time.Second)))
 									logOutput("TFTP transfer done")
-									// fmt.Printf("TFTP transfer done\n")
-									logOutput("Memory full : %d times", count)
-									// fmt.Printf("Memory full : %d times\n", count)
 									if profile {
 										logOutput("Time to parse TFTP packet: %.2f", float64(totalTime)/float64(time.Second))
 										logOutput("Time to waiting TFTP packet: %.2f", float64(totalWait)/float64(time.Second))
@@ -1248,8 +1303,11 @@ func main() {
 									count = 0
 									DefaultClientConfig.Boot.TFTPServerport = 0
 									DefaultClientConfig.Boot.TFTPport = 0
+									logOutput("Dying ...")
+									logStartStop()
+									log.Fatal("")
 								}
-								txQueue <- answerPkt
+								// txQueue <- answerPkt
 							case 6:
 								// ok for the moment we ack the data transfer size but we shall
 								// check if it match our needs !
@@ -1304,7 +1362,6 @@ func main() {
 							logOutput("TFTP Transfer")
 							logStartStop()
 							logOutput("sending TFTP request")
-							fmt.Printf("| ")
 							txFrame.length = len(frame)
 							txFrame.frame = frame
 							txQueue <- txFrame
