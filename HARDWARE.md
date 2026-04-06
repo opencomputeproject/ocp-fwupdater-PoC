@@ -15,7 +15,7 @@
 - TI TMUX1574 (TSSOP16 mounted on TSSOP→DIP adapter) — 1
   - https://www.ti.com/product/TMUX1574
 - SOIC‑16 → DIP adapter for SPI‑NOR — 1
-- 30 Ω series resistors, 1/4 W — 3 (MOSI, SCLK, CS)
+- 30 Ω series resistors, 1/4 W — 3 (INT, CS, RESET)
 - Pull resistors (values as required for Errata workaround) — as needed (see note)
 - 0.1 μF ceramic decoupling capacitor (placed close to TMUX VCC) — 1
 - Diode on 3.3 V rail for isolation (Schottky recommended) — 1
@@ -82,20 +82,21 @@ GND -> common ground
 - TMUX MISO : S3A → SPI1 MISO GPIO12 
 - TMUX CS: S4A → SPI1 CS GPIO13 (30 Ω series resistor)
 - TMUX SEL:  Connect to a spare Pico2 GPIO (used to flip SPI‑NOR control between Pico2 and host)
+- TMUX VCC: 3.3V + 0.1uF capacitor to GND
 - VBUS → VSYS (Pico2 powering breadboard 3.3 V rail)
 - Common GND: Pico2 GND → all devices
 - SPI-NOR SCLK: D1
 - SPI-NOR MOSI: D2
 - SPI-NOR MISO: D3
 - SPI-NOR CS: D4
-- SPI-NOR VCC: 3.3V + 0.1uF capacitor to GND
+- SPI-NOR VCC: 3.3V 
 - SPI-NOR GND: GND
 - 3.3 V isolation: Add diode on Pico2 3.3 V rail when sharing SPI‑NOR with an external host to prevent current backflow between power domains.
 
 (Adjust physical GPIO numbers if using alternate pin mapping on your board; above uses your provided mapping.)
 
 ## Signal Conditioning and PCB/Breadboard Notes
-- Errata 9 (RP2350): For RP2350 revisions <= A4, pull resistors may be required on certain SPI signals to maintain stability. Implement pull-ups or pull-downs as needed — in this setup pull up (47k) resistors were added on CS, MOSI, and SCLK.
+- Errata 9 (RP2350): For RP2350 revisions <= A4, pull resistors may be required on certain SPI signals to maintain stability. Implement pull-ups or pull-downs as needed — in this setup pull up (47k) resistors were added on INT, CS, and RESET.
 - Series resistors: Add 30 Ω, 1/4 W series resistors on MOSI, SCLK, and CS close to the Pico2 (driver side) to reduce overshoot and ringing introduced by TMUX delay and breadboard wiring.
 - Wire length: Use equal length wires for SPI signals (MOSI, MISO, SCLK, CS) to reduce skew and maintain signal integrity on high-speed SPI.
 - Decoupling: Place 0.1 μF ceramic capacitor close to TMUX VCC pin. Also ensure adequate decoupling for W5500 and SPI‑NOR devices per their datasheets.
